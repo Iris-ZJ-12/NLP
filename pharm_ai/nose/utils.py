@@ -7,6 +7,7 @@ from functools import partial
 from pathlib import Path
 
 import Levenshtein
+import json
 import numpy as np
 import pandas as pd
 from edit_distance import SequenceMatcher
@@ -30,6 +31,7 @@ class NoseModelBase:
     project_root = Path(__file__).parent
 
     def __init__(self, version, task_id, cuda_devices=None):
+        self.version = version
         self.output_dir = self.project_root / 'outputs' / version
         self.cache_dir = self.project_root / 'cache' / version
         self.best_model_dir = self.project_root / 'best_model' / f'{version}.{task_id}'
@@ -238,6 +240,7 @@ class Indication:
               'medgen', 'medgen_synonyms', 'wiki', 'ct_disease']
     synonym_fields = ['name', 'name_en', 'name_short', 'name_synonyms', 'medgen_synonyms', 'ct_disease']
     ambiguous_names = ['肿瘤', '癌症', '其他']
+    if_set_included = True
 
     def __init__(self, **kwargs):
         self.parent = []
@@ -252,8 +255,9 @@ class Indication:
         self.ids.append(esid)
         self.names.append(name)
         self.included = set()
-        self.__checked_included = set()
-        self.set_included_indication()
+        if self.if_set_included:
+            self.__checked_included = set()
+            self.set_included_indication()
 
     def add_child(self, node):
         assert isinstance(node, Indication)
@@ -293,7 +297,15 @@ class Indication:
         cls.names = []
 
     @classmethod
-    def from_dict(cls, items_of_kwargs: list):
+    def from_dict(cls, items_of_kwargs: list, cache_file: str = None):
+        """
+        Load indication objects from dictionary.
+        :param List[Dict] items_of_kwargs: init args.
+        :param cache_file: The json file to load/dump for included indications, 
+        to reduce time-consuming loading process.
+        """
+        use_cache = bool(cache_file) and Path(cache_file).exists()
+        cls.if_set_included = not use_cache
         ls_kwargs = deepcopy(items_of_kwargs)
         for kwargs in tqdm(ls_kwargs, desc='Loading indications'):
             parent_ids = kwargs.pop('parent_indication') if kwargs.get('parent_indication') else []
@@ -304,6 +316,20 @@ class Indication:
                     parent_kwargs = next(t for t in items_of_kwargs if t['esid'] == parent_id)
                     parent = Indication(**parent_kwargs)
                 parent.add_child(indication)
+        if use_cache:
+            # Set included indication objects post hoc
+            with open(cache_file, 'r') as f:
+                included_map = json.load(f)
+            for ind in tqdm(cls.objects, desc='Loading included'):
+                ind.included = {cls.get_object(esid=included_esid) for included_esid in included_map.get(ind.esid)}
+            logger.info('Included relations loaded from {}.', cache_file)
+        elif cache_file:
+            dump_dict = {ind.esid: [included.esid for included in ind.included] for ind in cls.objects}
+            with open(cache_file, 'w') as f:
+                json.dump(dump_dict, f)
+            logger.info('Included relations dumped to {}.', cache_file)
+        else:
+            logger.info('No cache_file specified, skipping dumping included relations.')
 
     def find_path(self, node):
         path = []

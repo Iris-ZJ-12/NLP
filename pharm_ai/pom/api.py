@@ -65,7 +65,7 @@ app = FastAPI(
     ]
 )
 
-logger = ECSLogger('pom')
+logger = ECSLogger('pom', app)
 predictor = PomPredictor()
 
 
@@ -127,11 +127,13 @@ async def predict(overall_input: OverAllInput):
         news_classification_labels_task = create_task(predictor.predict_news_classification_label(text_title))
 
         doc = overall_input.paragraphs
-        abstract_task = create_task(predictor.predict_summary(doc))
+        cleaned = predictor.clean_text(doc)
+        abstract_task = create_task(predictor.predict_summary(cleaned[:10]))
 
         news_classification_labels = await news_classification_labels_task
         abstract = await abstract_task
-        news_content_labels = await predictor.predict_news_content_label(text_title, abstract)
+        content = " ".join(cleaned)
+        news_content_labels = await predictor.predict_news_content_label(text_title, content, abstract)
         res = {'is_medical_news': '1', 'news_classification_labels': news_classification_labels,
                'news_content_labels': news_content_labels,
                'abstract_generation': abstract}

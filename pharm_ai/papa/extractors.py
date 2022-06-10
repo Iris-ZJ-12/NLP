@@ -484,6 +484,8 @@ class PapaUs(Papa):
                 w = code + ")"
                 if line.startswith(w):
                     line = "(" + line
+            if re.match(r'^\d\d\)', line):
+                line = '(' + line
             for code in inid_codes:
                 w = "(" + code + ")"
                 if line.startswith(w):
@@ -852,8 +854,20 @@ class PapaUs(Papa):
         if piece:
             res['piece'] = piece
             dates = self.find_date(piece, '22date')
-            if dates:
+            if len(dates) == 1:
                 res['date'] = dates[0]
+            else:
+                # fix US20060100288A1
+                if '22' in piece:
+                    first_p, second_p = piece.split('22', 1)
+                    first_date = self.find_date(first_p, '22date')
+                    second_date = self.find_date(second_p, '22date')
+                    if len(first_date) > 0 and len(second_date) > 0:
+                        res['date'] = second_date[0]
+                    else:
+                        res['date'] = dates[0]
+                else:
+                    res['date'] = dates[0]
         return res
 
     def extract_45(self, text):

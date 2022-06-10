@@ -2,7 +2,7 @@ import warnings
 
 import re
 import sys
-from functools import partial
+from functools import partial, cached_property
 from itertools import combinations, chain
 from pathlib import Path
 
@@ -10,6 +10,7 @@ import json
 import pandas as pd
 from loguru import logger
 from scipy.stats import gmean
+from sentence_transformers import InputExample
 from sklearn.model_selection import train_test_split
 from sklearn.utils import resample
 from tqdm import tqdm
@@ -240,6 +241,10 @@ class PreprocessorClassificationBase(PreprocessorBase):
         return res
 
 
+class PreprocessorEmbeddingBase(PreprocessorBase):
+    pass
+
+
 class NosePreprocessorV1_0(PreprocessorClassificationBase):
     version = 'v1.0'
     dataframe_columns = ['text_a', 'text_b', 'labels']
@@ -250,12 +255,12 @@ class NosePreprocessorV1_0(PreprocessorClassificationBase):
         re.compile(r'\s*,\s*').split
     ]
 
-    def __init__(self, dict_json="data/es_dict_1101.json"):
+    def __init__(self, dict_json="data/es_dict_1101.json", use_cached_indications: str = None):
         self.dict_json = dict_json
         with open(dict_json) as f:
             self.raw_dict = json.load(f)
         self.indications = [t['name'] for t in self.raw_dict]
-        Indication.from_dict(self.raw_dict)
+        Indication.from_dict(self.raw_dict, cache_file=use_cached_indications)
 
     def pull_dictionary(self, es_host='176'):
         super().pull_dictionary(saving_json=self.dict_json, es_host=es_host)
@@ -514,11 +519,54 @@ class NosePreprocessorV1_7(NosePreprocessorV1_4):
                    'target_text': self.seperator.join(target_texts)}
 
 
+class NosePreprocessorV2_0(PreprocessorEmbeddingBase):
+    """Embedding model dataset"""
+    version = 'v2.0'
+
+    def __init__(self, use_cached_indications: str = None):
+        self.previous_preprocessor = NosePreprocessorV1_0(use_cached_indications=use_cached_indications)
+
+
+    def get_train_data(self):
+        train_data = []
+        train_df = self.previous_preprocessor.get_from_h5('train')
+        for indication in Indication.objects:
+            for name in indication.iter_synonyms():
+                train_data.append(InputExample(texts=[name, indication.name]))
+                if indication.name != name:
+                    train_data.append(InputExample(texts=[indication.name, name]))
+        for _, row in train_df[train_df['labels'] == 1].drop_duplicates().iterrows():
+            train_data.append(InputExample(texts=[row['text_a'], row['text_b']]))
+        return train_data
+
+    def get_eval_data(self):
+        """
+        Get evaluator data for TripleEvaluator.
+        :return: Anchor data, Positive data, Negtive data.
+        """
+        eval_df = self.previous_preprocessor.get_from_h5()
+        select_eval_df = eval_df[eval_df['labels'] == 1].copy()
+        negtives = select_eval_df['text_b'].apply(NosePreprocessorV2_0._get_one_parent)
+        return (
+            select_eval_df[negtives.notna()]['text_b'].tolist(),
+            select_eval_df[negtives.notna()]['text_a'].tolist(),
+            negtives.dropna().tolist()
+        )
+
+    @staticmethod
+    def _get_one_parent(name):
+        obj = Indication.get_object(name=name)
+        for parent in obj.parent:
+            return parent.name
+        return None
+
+    def get_production_dataset(self):
+        return self.previous_preprocessor.get_production_dataset()
 
 class NosePreprocessor:
     CLASSES = [NosePreprocessorV1_0, NosePreprocessorV1_1, NosePreprocessorV1_2,
                NosePreprocessorV1_3, NosePreprocessorV1_4, NosePreprocessorV1_5,
-               NosePreprocessorV1_6, NosePreprocessorV1_7]
+               NosePreprocessorV1_6, NosePreprocessorV1_7, NosePreprocessorV2_0]
     preprocessor_versions = {c.version: c for c in CLASSES}
 
     @classmethod

@@ -200,17 +200,14 @@ class NewsFolding:
         folding_logger.debug('Got {} historical_data:\n{}', selected_data.shape[0], selected_data.to_dict('records'))
         change_result = dict()
         if not selected_data.empty:
-            to_change_data = selected_data[
-                selected_data['similar_esid'].isin(selected_data['esid']) | selected_data['similar_esid'].isna()
-            ]
             to_update = [{'esid': id_, 'similar_esid': article_id}
-                         for id_ in to_change_data['esid']]
+                         for id_ in selected_data['esid']]
             response = update_bulk(self.es, to_update)
             if not response['errors']:
-                change_result = {id_: article_id for id_ in to_change_data['esid']}
-                folding_logger.debug('Folding head of {} changed to {}', to_change_data['esid'].tolist(), article_id)
+                change_result = {id_: article_id for id_ in selected_data['esid']}
+                folding_logger.debug('Folding head of {} changed to {}', selected_data['esid'].tolist(), article_id)
             else:
-                folding_logger.error('Folding head of {} changed to {} error.', to_change_data['esid'].tolist(), article_id)
+                folding_logger.error('Folding head of {} changed to {} error.', selected_data['esid'].tolist(), article_id)
         else:
             folding_logger.debug("No historical data fetched, not change any head.")
         return change_result
